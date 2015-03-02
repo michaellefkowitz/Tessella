@@ -34,6 +34,7 @@ class Tessella:
     
     def __init__(self, dimensions):
         self.savefile = "savedmoves" + str(dimensions) + ".p"
+        self.researchfile = "toresearch" + str(dimensions) + ".p"
         self.d = dimensions
         self.h = self.d * 2 - 1
         self.pieces_remaining = {-1: self.h-2, 1: self.h-2}
@@ -93,8 +94,10 @@ class Tessella:
             friendly.add((self.h - 1 - abs(self.d-i-1), i))
         self.initial = {"player":1,"pieces":{1: friendly, -1: enemy},"ply":0}
         
-        # Remember best moves of already seen board positions (speed up opengame), and killer moves per depth
+        # Remember best moves of already seen board positions (speed up opengame)
+        # states seen in human player games (to research later), and killer moves per depth
         self.best_moves = {}
+        self.to_research = []
         self.killer_moves = {}
         self.killer_memory = 3
         
@@ -255,10 +258,12 @@ class Tessella:
     def load_best_moves(self):
         '''replace best moves dictionary with contents of pickled file'''
         self.best_moves = pickle.load( open( self.savefile, "rb" ) )
+        self.to_research = pickle.load( open( self.researchfile, "rb" ) )
         
     def dump_best_moves(self):
         '''save best move to pickle file'''
         pickle.dump( self.best_moves, open( self.savefile, "wb" ) )
+        pickle.dump( self.to_research, open( self.researchfile, "wb" ) )
         
     def get_random_state(self, whites, blacks):
         state = {}
@@ -583,11 +588,13 @@ def get_real_position((r,c)):
     yreal = r * tile_size + board_offset[1]
     return (xreal,yreal)
 
-def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=None, alternate=False, delay=700):
+def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=None, alternate=False, delay=700, single_game=False):
 
-    # Load best moves from pickled file
+    # Load best moves, research dict from pickled files
     if os.path.isfile(game.savefile):
         game.best_moves = pickle.load( open( game.savefile, "rb" ) )
+    if os.path.isfile(game.researchfile):
+        game.to_research = pickle.load( open( game.researchfile, "rb" ) )
     
     # Which players are humans? What AI should the computers be?
     humanity = {1: p1_humanity, -1: p2_humanity}
@@ -693,7 +700,12 @@ def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=Non
             state = game.result(state, move)
             vacated_spot = get_real_position(move[0])
             last_moved_spot = get_real_position(move[1])
-            frozen_state = game.freeze_state(state) 
+            frozen_state = game.freeze_state(state)
+            
+            # If there's a human player, research this state later
+            if (not game.terminal_test(state)) and (p1_humanity or p2_humanity) and state["ply"] <= 10:
+                game.to_research.append(frozen_state)
+            
             if frozen_state in used_states:
                 used_states[frozen_state] += 1   
                 if used_states[frozen_state] >= 3:
@@ -736,7 +748,11 @@ def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=Non
                             state = game.result(state, move)
                             vacated_spot = get_real_position(move[0])
                             last_moved_spot = get_real_position(move[1])
-                            frozen_state = game.freeze_state(state) 
+                            frozen_state = game.freeze_state(state)
+                            
+                            if (not game.terminal_test(state)) and state["ply"] <= 10:
+                                game.to_research.append(frozen_state)
+                
                             if frozen_state in used_states:
                                 used_states[frozen_state] += 1
                                 if used_states[frozen_state] >= 3:
@@ -773,9 +789,13 @@ def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=Non
             # Save best moves dictionary to pickled file
             symmetrize_saved_moves(game)
             game.dump_best_moves()
-            print "best moves dictionary now has", len(game.best_moves), "entries."
+            print "best moves dictionary now has", len(game.best_moves), "entries."        
+            print "unresearched states:", len(game.to_research)            
             
-            
+            if single_game:
+                return None
+                sys.exit()
+                
             # New game
             print "\n\nNEW GAME\n"
             game_over = False
@@ -812,7 +832,7 @@ def train_to_depth(game,d,start=None):
                 i += 1
                 print "move", i
                 newstate = game.result(state,action)
-                temp = ab_player(game,newstate) # in the process, saves to best moves dictionary
+                ab_player(game,newstate) # in the process, saves to best moves dictionary
                 try_all(newstate,depth-1)
         return None
     
@@ -834,6 +854,7 @@ def flip((r,c), ver=False, hor=False, size=5):
     return (row, col)
 
 def symmetrize_saved_moves(game):
+    '''Creates eight way symmetry in the best moves dictionary of a game'''
     for frozenstate in game.best_moves.keys():
         mine,yours = frozenstate
         (bestmoves, val) = game.best_moves[frozenstate]
@@ -843,45 +864,21 @@ def symmetrize_saved_moves(game):
             moves2 = [tuple([flip(x,s1,s2,game.d) for x in move]) for move in bestmoves]
             game.best_moves[(frozenset(mine2),frozenset(yours2))] = (moves2, val)
 
-def learn_common_states(game, toplay, tolearn, depth, startstate=None):
+def research_states(game, player=great_ab_player):
+    '''Researches the best move for each position in a games to_research
+    dictionary (after loading it) using the specified player.'''
     game.load_best_moves()
-    common_states = {}
-    
-    for g in range(toplay):
-        if g % 1000 == 0:
-            print "game", g
-        if startstate:
-            state = startstate
-        else:
-            state = game.initial
-        for d in range(depth):
-            state = game.result(state,random_player(game,state,verbose=False))
-        frozenstate = game.freeze_state(state)
-        if frozenstate in common_states:
-            common_states[frozenstate] += 1
-        else:
-            common_states[frozenstate] = 1
-    
-    cs = sorted(common_states.keys(), key = common_states.get)
-    
+    num = len(game.to_research)
     i = 0
-    
-    while cs and i < tolearn:
-        fs = cs.pop()
-        print "State appears in", common_states[fs], "games:\t", 
-        if fs not in game.best_moves:
-            ab_player(game,game.thaw_state(fs))
-            symmetrize_saved_moves(game)
-            game.dump_best_moves()
-            print "Game now has", len(game.best_moves), "moves stored.\n"
-            i += 1
-        else:
-            print "already stored."
-    
-    return None
+    while game.to_research:
+        i += 1
+        print "researching state", i, "of", num, "...\n"
+        state = game.thaw_state(game.to_research.pop())
+        player(game,state)
+    symmetrize_saved_moves(game)
+    game.dump_best_moves()
     
     
-
 ###############
 ### RUN IT! ###
 ###############
@@ -897,12 +894,15 @@ game = t5
 
 #play_game(game, query_player, dumb_ab_player)
 
-play_gui_game(game, 1, 0, ab_player, alternate=True)
+#play_gui_game(game, 1, 1)
+
+#play_gui_game(game, 1, 0, ab_player, alternate=True)
 #play_gui_game(game, 0, 0, great_ab_player, alternate=True)
 #play_gui_game(game, 0, 0, great_ab_player, fast_ab_player, alternate=True, lencap=8, delay=100)
 #play_gui_game(game, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=7, delay=100)
 #play_gui_game(game, 0, 0, great_ab_player, random_player, alternate=True, lencap=6)
 
+research_states(t5)
 
 ##################################play_gui_game(game, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=6, delay=100)
 ### SEE WHAT'S TAKING SO LONG ###
@@ -922,6 +922,5 @@ def test_code_efficiency():
     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
     ps.print_stats()
     print s.getvalue()
-    pass
 
 #test_code_efficiency()
