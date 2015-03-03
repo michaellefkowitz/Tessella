@@ -895,7 +895,6 @@ game = t5
 #play_game(game, query_player, dumb_ab_player)
 
 #play_gui_game(game, 1, 1)
-
 #play_gui_game(game, 1, 0, ab_player, alternate=True)
 #play_gui_game(game, 0, 0, great_ab_player, alternate=True)
 #play_gui_game(game, 0, 0, great_ab_player, fast_ab_player, alternate=True, lencap=8, delay=100)
@@ -913,7 +912,7 @@ def test_code_efficiency():
     pr.enable()
     
     t5.best_moves = pickle.load( open( t5.savefile, "rb" ) )
-    play_game(t5, ab_player, random_player)
+    play_game(t5, great_ab_player, random_player)
     #ab_player(t5, t5.get_random_state(7,7))
     
     pr.disable()
