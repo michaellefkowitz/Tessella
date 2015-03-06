@@ -64,7 +64,7 @@ class Tessella:
                             ns.add(n)
                     self.neighbors[(r,c)] = ns
         
-        # Store which pairs of tiles are aligned, and what they're attacking
+        # Store which pairs of tiles are aligned, what tiles intervene (set), and what they're attacking (in list and set form)
         self.aligned = {}
         for (r,c) in self.tiles:         # from
             for (rr,cc) in self.tiles:   # to
@@ -84,7 +84,7 @@ class Tessella:
                             attacked.append((sr,sc))        # add to list of attacked tiles
                             sr, sc = sr+dr, sc+dc           # move to next tile
                         if attacked:
-                            self.aligned[((r,c),(rr,cc))] = intermediate, attacked
+                            self.aligned[((r,c),(rr,cc))] = set(intermediate), attacked, set(attacked)
 
         # Create initial state
         friendly = set()
@@ -92,7 +92,7 @@ class Tessella:
         for i in range(1,self.h-1):
             enemy.add((abs(self.d-i-1), i))
             friendly.add((self.h - 1 - abs(self.d-i-1), i))
-        self.initial = {"player":1,"pieces":{1: friendly, -1: enemy},"ply":0}
+        self.initial = {"player":1,"pieces":{1: friendly, -1: enemy, 0: friendly.union(enemy)},"ply":0}
         
         # Remember best moves of already seen board positions (speed up opengame)
         # states seen in human player games (to research later), and killer moves per depth
@@ -142,47 +142,53 @@ class Tessella:
         newstate["pieces"] = dict(newstate["pieces"])
         for key in newstate["pieces"]:
             newstate["pieces"][key] = set(newstate["pieces"][key])
+
+        # Pick up piece
+        newstate["pieces"][player].remove((r,c))     
+        newstate["pieces"][0].remove((r,c))     
+        # Remove captured piece if any
+        newstate["pieces"][-player].discard((rr,cc))
+        newstate["pieces"][0].discard((rr,cc))
+        # Place at new location
+        newstate["pieces"][player].add((rr,cc))    
+        newstate["pieces"][0].add((rr,cc))
         
-        # Make the move
-        newstate["pieces"][player].remove((r,c))     # Pick up piece
-        newstate["pieces"][-player].discard((rr,cc)) # Remove captured piece if any
-        newstate["pieces"][player].add((rr,cc))      # Place at new location
-        newstate["player"] = -player                 # Switch players
+        # Switch players
+        newstate["player"] = -player
+        # Increase game depth
         newstate["ply"] += 1
         
         return newstate
         
     def step_moves(self,state):
-        '''returns the set of states that are accessible from the current state via a step move'''
+        '''returns the list of legal step moves'''
         moves = []
-        player = state["player"]
-        # Find all legal step moves
-        for piece in state["pieces"][player]:
-            for neighbor in self.neighbors[piece]:
-                if not (neighbor in state["pieces"][1] or neighbor in state["pieces"][-1]):
-                    moves.append((piece,neighbor))
+        all_pieces = state["pieces"][0]
+
+        for piece in state["pieces"][state["player"]]:
+            moves += [(piece,neighbor) for neighbor in self.neighbors[piece] if not (neighbor in all_pieces)]
         return moves
     
+    
     def capture_moves(self,state): 
-        '''returns the list of capturing moves that possible from state'''
+        '''returns the list of legal capturing moves'''
         moves = []
         player = state["player"]
-        all_pieces = state["pieces"][-1].union(state["pieces"][1])
-        for piece in state["pieces"][player]:
+        all_pieces = state["pieces"][0]
+        
+        # Loop over all attacker / backer pairs of friendly pieces
+        for attacker in state["pieces"][player]:
             for backer in state["pieces"][player]:
-                if (backer,piece) in self.aligned:
-                    clear = True
-                    for intervener in self.aligned[(backer,piece)][0]:
-                        if intervener in all_pieces:
-                            clear = False
-                            break
-                    if clear:
-                        for attacked in self.aligned[(backer,piece)][1]:
-                            if attacked in state["pieces"][state["player"]]:
-                                break
-                            if attacked in state["pieces"][-state["player"]]:
-                                moves.append((piece,attacked))
-                                break
+                if (backer,attacker) in self.aligned:                                          # if the pieces are in a line,
+                    if state["pieces"][-state["player"]] & self.aligned[(backer,attacker)][2]: # if some enemy piece is in the line of fire (saves time)
+                        if not all_pieces & self.aligned[(backer,attacker)][0]:                # if there are no interveners,
+                            # check through attacked tiles, in order
+                            for attacked_spot in self.aligned[(backer,attacker)][1]:  
+                                if attacked_spot in state["pieces"][state["player"]]:
+                                    break
+                                if attacked_spot in state["pieces"][-state["player"]]:
+                                    moves.append((attacker,attacked_spot))
+                                    break
         return moves
     
     # Additional functions for the games.py module
@@ -269,7 +275,7 @@ class Tessella:
         state = {}
         state["player"] = random.choice([-1,1])
         state["ply"] = 0
-        state["pieces"] = {1:set(),-1:set()}
+        state["pieces"] = {1:set(), -1:set(), 0:set()}
         
         lastrow = (self.d - 1) * 2
         w = b = 0
@@ -277,12 +283,15 @@ class Tessella:
             r, c = random.randint(0,lastrow), random.randint(0,lastrow)
             if (r,c) in self.tiles and (r,c) not in state["pieces"][1]:
                 state["pieces"][1].add((r,c))
+                state["pieces"][0].add((r,c))
                 w += 1
         while b < blacks:
             r, c = random.randint(0,lastrow), random.randint(0,lastrow)
             if (r,c) in self.tiles and (r,c) not in state["pieces"][1] and (r,c) not in state["pieces"][-1]:
                 state["pieces"][-1].add((r,c))
+                state["pieces"][0].add((r,c))
                 b += 1
+        assert state["pieces"][0] == state["pieces"][-1].union(state["pieces"][1])
         return state
                 
 ###########
@@ -385,14 +394,14 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
                 return v
             beta = min(beta, v)
         return v * (1 + random.random() * noise)
-
+    
     # Body of search starts here
     bestmoves = []
     bestvalue = -infinity
     
     # Use one of best moves if stored alerady    
     frozenstate = game.freeze_state(state)
-    if lookupbest and frozenstate in game.best_moves and noise == 0:
+    if lookupbest and frozenstate in game.best_moves:
         move = random.choice(game.best_moves[frozenstate][0])
         print "looked up best moves (", len(game.best_moves[frozenstate][0]), ")"
         return move
@@ -887,32 +896,32 @@ t4 = Tessella(4)
 t5 = Tessella(5)
 t6 = Tessella(6)
 
-game = t5
+#play_game(t5, query_player, dumb_ab_player)
 
-#train_to_depth(game,2)
-#learn_common_states(t5, 35000, 5, 7)
+#play_gui_game(t5, 1, 1)
+#play_gui_game(t5, 0, 1, ab_player, alternate=True)
+#play_gui_game(t5, 0, 0, great_ab_player, alternate=True)
+#play_gui_game(t5, 0, 0, great_ab_player, fast_ab_player, alternate=True, lencap=8, delay=100)
+#play_gui_game(t5, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=7, delay=100)
+#play_gui_game(t5, 0, 0, great_ab_player, random_player, alternate=True, lencap=6)
 
-#play_game(game, query_player, dumb_ab_player)
-
-#play_gui_game(game, 1, 1)
-#play_gui_game(game, 1, 0, ab_player, alternate=True)
-#play_gui_game(game, 0, 0, great_ab_player, alternate=True)
-#play_gui_game(game, 0, 0, great_ab_player, fast_ab_player, alternate=True, lencap=8, delay=100)
-#play_gui_game(game, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=7, delay=100)
-#play_gui_game(game, 0, 0, great_ab_player, random_player, alternate=True, lencap=6)
-
-research_states(t5)
+#research_states(t5)
 
 ##################################play_gui_game(game, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=6, delay=100)
 ### SEE WHAT'S TAKING SO LONG ###
 #################################
 
+rands = [t5.get_random_state(7,7) for i in range(50000)]
+
 def test_code_efficiency():
     pr = cProfile.Profile()
     pr.enable()
     
-    t5.best_moves = pickle.load( open( t5.savefile, "rb" ) )
-    play_game(t5, great_ab_player, random_player)
+    for r in rands:
+        t5.step_moves(r)
+        t5.capture_moves(r)
+    #t5.best_moves = pickle.load( open( t5.savefile, "rb" ) )    
+    #play_game(t5, great_ab_player, random_player)
     #ab_player(t5, t5.get_random_state(7,7))
     
     pr.disable()
@@ -922,4 +931,4 @@ def test_code_efficiency():
     ps.print_stats()
     print s.getvalue()
 
-#test_code_efficiency()
+test_code_efficiency()
