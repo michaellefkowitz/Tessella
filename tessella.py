@@ -598,7 +598,7 @@ def get_real_position((r,c)):
     return (xreal,yreal)
 
 def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=None, alternate=False, delay=700, single_game=False):
-
+    
     # Load best moves, research dict from pickled files
     if os.path.isfile(game.savefile):
         game.best_moves = pickle.load( open( game.savefile, "rb" ) )
@@ -899,7 +899,7 @@ t6 = Tessella(6)
 #play_game(t5, query_player, dumb_ab_player)
 
 #play_gui_game(t5, 1, 1)
-#play_gui_game(t5, 0, 1, ab_player, alternate=True)
+play_gui_game(t5, 0, 1, ab_player, alternate=True)
 #play_gui_game(t5, 0, 0, great_ab_player, alternate=True)
 #play_gui_game(t5, 0, 0, great_ab_player, fast_ab_player, alternate=True, lencap=8, delay=100)
 #play_gui_game(t5, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=7, delay=100)
@@ -930,5 +930,3 @@ def test_code_efficiency():
     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
     ps.print_stats()
     print s.getvalue()
-
-test_code_efficiency()
