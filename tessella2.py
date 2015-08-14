@@ -232,7 +232,8 @@ class Tessella:
         clustered_points = self.spread(yours) - self.spread(mine)
         centrality_points = self.periferality(yours) - self.periferality(mine)
         
-        return int(50 * pieces_points + 2 * clustered_points + centrality_points)
+        #return int(50 * pieces_points + 2 * clustered_points + centrality_points)
+        return 50 * pieces_points + 2 * clustered_points + centrality_points
     
     def terminal_test(self, state):
         '''A state is terminal if one player has fewer than d - 1 pieces'''
@@ -298,7 +299,13 @@ class Tessella:
 # GAME AI #
 ###########
 
-def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}, storebest=False, noise=0.0, lookupbest=True):
+opening_moves = [((5,1),(5,2)),
+                 ((5,1),(4,2)),
+                 ((6,2),(5,3)),
+                 ((6,2),(6,3)),
+                 ((7,3),(6,4))]
+
+def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=9, drawstates={}, storebest=False, noise=0.0, lookupbest=True, bootstrap=0, set_opening=True):
     """Search game to determine best action; use alpha-beta pruning.
     This version cuts off search and uses an evaluation function when
     it reaches max depth, and only considers capture moves after min depth."""
@@ -309,7 +316,7 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
         frozenstate = game.freeze_state(state)
         
         # Use value of best move if stored alerady
-        if frozenstate in game.best_moves:
+        if frozenstate in game.best_moves and depth >= bootstrap:
             return game.best_moves[frozenstate][1] * (1 + random.random() * noise)
             
         # Terminate and use utility if bottoming out
@@ -354,7 +361,7 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
         frozenstate = game.freeze_state(state)
         
         # Use value of best move if stored alerady
-        if frozenstate in game.best_moves:
+        if frozenstate in game.best_moves and depth >= bootstrap:
             return game.best_moves[frozenstate][1] * (1 + random.random() * noise)
             
         # Terminate and use utility if bottoming out
@@ -391,6 +398,10 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
             if v <= alpha:
                 if not a in game.killer_moves[p]:
                     game.killer_moves[p] = [a] + game.killer_moves[p][:-1] #
+                # Yell
+                if depth == 0:
+                    print "alpha cut off!",
+                    v = -infinity
                 return v
             beta = min(beta, v)
         return v * (1 + random.random() * noise)
@@ -398,22 +409,40 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
     # Body of search starts here
     bestmoves = []
     bestvalue = -infinity
-    
+    '''
     # Use one of best moves if stored alerady    
     frozenstate = game.freeze_state(state)
-    if lookupbest and frozenstate in game.best_moves:
+    if lookupbest and frozenstate in game.best_moves and bootstrap == 0:
         move = random.choice(game.best_moves[frozenstate][0])
         print "looked up best moves (", len(game.best_moves[frozenstate][0]), ")"
         return move
+    '''
+    frozenstate = game.freeze_state(state)
+    known_best_moves = []
+    if frozenstate in game.best_moves:
+        known_best_moves = game.best_moves[frozenstate][0]
     
-    # Sort moves using killer heuristic
+        if lookupbest and bootstrap == 0:
+            move = random.choice(known_best_moves)
+            print "looked up best moves (", len(game.best_moves[frozenstate][0]), ")"
+            return move 
+    
+    # Sort moves using known best moves AND killer heuristic
+    killers = []
     actions = game.actions(state)
     if ply in game.killer_moves:
-        actions.sort(key=(game.killer_moves[ply]+actions).index)
-    
-    # Check every move
+        killers = game.killer_moves[ply]
+    actions.sort(key=(known_best_moves + killers + actions).index)
+    print "kbm:", known_best_moves, '\nkiller:', killers
+        
+    # Predetermined first move for white
+    if set_opening and state["ply"] == 0:
+        print len(opening_moves), "set opening moves."
+        return random.choice(opening_moves)
+        
+    # Main loop: check every move, using alpha cut off   
     for move in actions:
-        print "testing move", move, "...", # useful to diagnose ordering hueristics
+        print "testing", move, "...", # useful to diagnose ordering hueristics
         result = game.result(state, move)
         
         # Terminate if a move that wins immediately is found
@@ -421,14 +450,12 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
             bestmoves = [move]
             val = game.utility(result, player)
             break
-        val = min_value(result,-infinity,infinity,0)
+        
+        # Get value of move        
+        val = min_value(result,bestvalue,infinity,0)    #CALL TO MINIMAX
+        #val = min_value(result,-infinity,infinity,0)    #CALL TO MINIMAX
         print round(val,2)
-        '''
-        # Any winning branch will do, stop searching if one is found
-        if val > 1000:   ######
-            print ""     ######
-            return move  ######
-        '''
+
         if val > bestvalue:
             bestmoves = [move]
             bestvalue = val
@@ -436,10 +463,13 @@ def alphabeta_tessella_search(state, game, mindepth=3, maxdepth=6, drawstates={}
             bestmoves.append(move)
     print ""
     
+    # Store solution
     if storebest:
         game.best_moves[game.freeze_state(state)] = (bestmoves, val) # Store solution for future use in move ordering
+
     if len(bestmoves) > 1:
         print len(bestmoves), "moves tied for best move."
+        
     return random.choice(bestmoves)
 
 
@@ -460,8 +490,9 @@ def query_player(game, state):
         except:
             print "That's not the right format."
             
+# Misc AIs
 def captury_player(game, state, drawstates={}):
-    print "capturing player:"
+    print "captury player:"
     if game.capture_moves(state):
         return random.choice(game.capture_moves(state))
     else:
@@ -490,19 +521,37 @@ def meh_stoch_player(game, state, drawstates={}, verbose=True):
             return move[0]
     return moves[0][0] # In case the above runs out of moves...which it shouldnt...
 
+# Alpha Beta AIs
+def incredible_ab_player(game, state, drawstates={}):
+    print "incredible ab player:"
+    move = alphabeta_tessella_search(state, game, 5, 12, drawstates, storebest=True)
+    print move, "\n"
+    return move
+
+def researchy_incredible_ab_player(game, state, drawstates={}):
+    print "researchy incredible ab player:"
+    move = alphabeta_tessella_search(state, game, 5, 12, drawstates, storebest=True, bootstrap=2)
+    print move, "\n"
+    return move
+
 def great_ab_player(game, state, drawstates={}):
     print "great ab player:"
     move = alphabeta_tessella_search(state, game, 4, 10, drawstates, storebest=True)
     print move, "\n"
     return move
-
-
+    
 def safe_great_ab_player(game, state, drawstates={}):
-    print "great ab player:"
-    move = alphabeta_tessella_search(state, game, 4, 10, drawstates, storebest=False, lookupbest=False)
+    print "safe great ab player:"
+    move = alphabeta_tessella_search(state, game, 4, 10, drawstates, storebest=False)
     print move, "\n"
     return move
 
+def researchy_great_ab_player(game, state, drawstates={}):
+    print "researchy great ab player:"
+    move = alphabeta_tessella_search(state, game, 4, 10, drawstates, storebest=True, bootstrap=2)
+    print move, "\n"
+    return move
+    
 def ab_player(game, state, drawstates={}):
     print "ab player:"
     move = alphabeta_tessella_search(state, game, 3, 10, drawstates)
@@ -523,13 +572,7 @@ def faulty_ab_player(game, state, drawstates={}):
         return random_player(game, state)    
     else:
         return ab_player(game, state, drawstates)
-
     
-def fast_ab_player(game, state, drawstates={}):
-    print "fast ab player:"
-    move = alphabeta_tessella_search(state, game, 2, 8, drawstates, lookupbest=False)
-    print move, "\n"
-    return move
 
 ##########################
 # GAME PLAY IN TERMINAL #
@@ -852,27 +895,29 @@ def play_gui_game(game, p1_humanity, p2_humanity, ai1=None, ai2=None, lencap=Non
 ### TRAINING ###
 ################
 
-def train_to_depth(game,d,start=None):
+def train_to_depth(game,d,AI,start=None):
     
-    game.load_best_move()
+    game.load_best_moves()
     if not start:
         start = game.initial
   
-    def try_all(state,depth):
+    def try_all(state,depth,AIs_turn):
         if depth > 0:
             i = len(game.actions(state))
             print "\nExploring", i, "moves of depth", d - depth, "\n"
-            i = 0
-            for action in t5.actions(state):
-                i += 1
-                print "move", i
-                newstate = game.result(state,action)
-                ab_player(game,newstate) # in the process, saves to best moves dictionary
-                try_all(newstate,depth-1)
+            if AIs_turn:
+                newstate = game.result(state, AI(game,state))
+                try_all(newstate,depth-1,False)
+            else:
+                for action in t5.actions(state):
+                    newstate = game.result(state,action)
+                    try_all(newstate,depth-1,True)
+            game.dump_best_moves()
         return None
     
     print "best moves stored:", len(game.best_moves)
-    try_all(start,d)
+    try_all(start,d,False)
+    try_all(start,d,True)
     print "best moves stored:", len(game.best_moves)
     
     game.dump_best_moves()
@@ -926,14 +971,16 @@ t6 = Tessella(6)
 #play_game(t5, query_player, dumb_ab_player)
 
 #play_gui_game(t5, 1, 1)
+
 #play_gui_game(t5, 1, 0, great_ab_player, alternate=True)
-#play_gui_game(t5, 0, 0, great_ab_player, delay=500)
-play_gui_game(t5, 0, 0, safe_great_ab_player, delay=500)
+play_gui_game(t5, 1, 0, researchy_great_ab_player, alternate=True)
+play_gui_game(t5, 0, 0, researchy_great_ab_player, delay=500)
 #play_gui_game(t5, 0, 0, great_ab_player, noisy_ab_player, alternate=True, lencap=8, delay=100)
 #play_gui_game(t5, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=7, delay=100)
 #play_gui_game(t5, 0, 0, great_ab_player, random_player, alternate=True, lencap=6)
 
 #research_states(t5)
+#train_to_depth(t5,4,researchy_great_ab_player)
 
 ##################################play_gui_game(game, 0, 0, great_ab_player, faulty_ab_player, alternate=True, lencap=6, delay=100)
 ### SEE WHAT'S TAKING SO LONG ###
